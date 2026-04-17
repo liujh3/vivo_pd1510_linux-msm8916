@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -32,7 +32,7 @@ static const struct regulator_bulk_data tianma_nt35521_5p5_supplies[] = {
 static inline
 struct tianma_nt35521_5p5 *to_tianma_nt35521_5p5(struct drm_panel *panel)
 {
-	return container_of(panel, struct tianma_nt35521_5p5, panel);
+	return container_of_const(panel, struct tianma_nt35521_5p5, panel);
 }
 
 static void tianma_nt35521_5p5_reset(struct tianma_nt35521_5p5 *ctx)

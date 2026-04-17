@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -27,7 +27,7 @@ struct boe_otm8019a_5p0 {
 static inline
 struct boe_otm8019a_5p0 *to_boe_otm8019a_5p0(struct drm_panel *panel)
 {
-	return container_of(panel, struct boe_otm8019a_5p0, panel);
+	return container_of_const(panel, struct boe_otm8019a_5p0, panel);
 }
 
 static void boe_otm8019a_5p0_reset(struct boe_otm8019a_5p0 *ctx)

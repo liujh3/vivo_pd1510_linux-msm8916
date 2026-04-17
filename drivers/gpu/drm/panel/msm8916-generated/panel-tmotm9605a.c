@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -28,7 +28,7 @@ static const struct regulator_bulk_data tmotm9605a_supplies[] = {
 
 static inline struct tmotm9605a *to_tmotm9605a(struct drm_panel *panel)
 {
-	return container_of(panel, struct tmotm9605a, panel);
+	return container_of_const(panel, struct tmotm9605a, panel);
 }
 
 static void tmotm9605a_reset(struct tmotm9605a *ctx)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -23,7 +23,7 @@ struct otm1285a_otp {
 
 static inline struct otm1285a_otp *to_otm1285a_otp(struct drm_panel *panel)
 {
-	return container_of(panel, struct otm1285a_otp, panel);
+	return container_of_const(panel, struct otm1285a_otp, panel);
 }
 
 static void otm1285a_otp_reset(struct otm1285a_otp *ctx)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -32,7 +32,7 @@ static const struct regulator_bulk_data boe_499_v1_supplies[] = {
 
 static inline struct boe_499_v1 *to_boe_499_v1(struct drm_panel *panel)
 {
-	return container_of(panel, struct boe_499_v1, panel);
+	return container_of_const(panel, struct boe_499_v1, panel);
 }
 
 static void boe_499_v1_reset(struct boe_499_v1 *ctx)

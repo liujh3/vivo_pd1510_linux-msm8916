@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -25,7 +25,7 @@ struct inx_450_v1 {
 
 static inline struct inx_450_v1 *to_inx_450_v1(struct drm_panel *panel)
 {
-	return container_of(panel, struct inx_450_v1, panel);
+	return container_of_const(panel, struct inx_450_v1, panel);
 }
 
 static void inx_450_v1_reset(struct inx_450_v1 *ctx)

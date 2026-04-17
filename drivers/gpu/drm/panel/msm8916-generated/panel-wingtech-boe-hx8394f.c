@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -28,7 +28,7 @@ static const struct regulator_bulk_data hx8394f_supplies[] = {
 
 static inline struct hx8394f *to_hx8394f(struct drm_panel *panel)
 {
-	return container_of(panel, struct hx8394f, panel);
+	return container_of_const(panel, struct hx8394f, panel);
 }
 
 static void hx8394f_reset(struct hx8394f *ctx)

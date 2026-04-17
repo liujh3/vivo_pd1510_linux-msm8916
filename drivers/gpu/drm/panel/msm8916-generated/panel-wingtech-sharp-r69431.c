@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -23,7 +23,7 @@ struct r69431 {
 
 static inline struct r69431 *to_r69431(struct drm_panel *panel)
 {
-	return container_of(panel, struct r69431, panel);
+	return container_of_const(panel, struct r69431, panel);
 }
 
 static void r69431_reset(struct r69431 *ctx)

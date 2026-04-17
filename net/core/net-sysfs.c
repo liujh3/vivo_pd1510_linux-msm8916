@@ -1022,7 +1022,7 @@ static int netdev_rx_queue_set_rps_mask(struct netdev_rx_queue *queue,
 int rps_cpumask_housekeeping(struct cpumask *mask)
 {
 	if (!cpumask_empty(mask)) {
-		cpumask_and(mask, mask, housekeeping_cpumask(HK_TYPE_DOMAIN));
+		cpumask_and(mask, mask, housekeeping_cpumask(HK_TYPE_DOMAIN_BOOT));
 		cpumask_and(mask, mask, housekeeping_cpumask(HK_TYPE_WQ));
 		if (cpumask_empty(mask))
 			return -EINVAL;
@@ -1120,8 +1120,10 @@ static ssize_t store_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
 			return -ENOMEM;
 
 		table->log = ilog2(mask) + 1;
-		for (count = 0; count <= mask; count++)
+		for (count = 0; count <= mask; count++) {
 			table->flows[count].cpu = RPS_NO_CPU;
+			table->flows[count].filter = RPS_NO_FILTER;
+		}
 	} else {
 		table = NULL;
 	}
@@ -1179,24 +1181,24 @@ static void rx_queue_release(struct kobject *kobj)
 	netdev_put(queue->dev, &queue->dev_tracker);
 }
 
-static const void *rx_queue_namespace(const struct kobject *kobj)
+static const struct ns_common *rx_queue_namespace(const struct kobject *kobj)
 {
 	struct netdev_rx_queue *queue = to_rx_queue(kobj);
 	struct device *dev = &queue->dev->dev;
-	const void *ns = NULL;
 
 	if (dev->class && dev->class->namespace)
-		ns = dev->class->namespace(dev);
+		return dev->class->namespace(dev);
 
-	return ns;
+	return NULL;
 }
 
 static void rx_queue_get_ownership(const struct kobject *kobj,
 				   kuid_t *uid, kgid_t *gid)
 {
-	const struct net *net = rx_queue_namespace(kobj);
+	const struct ns_common *ns = rx_queue_namespace(kobj);
 
-	net_ns_get_ownership(net, uid, gid);
+	net_ns_get_ownership(ns ? container_of(ns, struct net, ns) : NULL,
+			     uid, gid);
 }
 
 static const struct kobj_type rx_queue_ktype = {
@@ -1328,7 +1330,7 @@ net_rx_queue_update_kobjects(struct net_device *dev, int old_num, int new_num)
 		struct netdev_rx_queue *queue = &dev->_rx[i];
 		struct kobject *kobj = &queue->kobj;
 
-		if (!refcount_read(&dev_net(dev)->ns.count))
+		if (!check_net(dev_net(dev)))
 			kobj->uevent_suppress = 1;
 		if (dev->sysfs_rx_queue_group)
 			sysfs_remove_group(kobj, dev->sysfs_rx_queue_group);
@@ -1929,24 +1931,24 @@ static void netdev_queue_release(struct kobject *kobj)
 	netdev_put(queue->dev, &queue->dev_tracker);
 }
 
-static const void *netdev_queue_namespace(const struct kobject *kobj)
+static const struct ns_common *netdev_queue_namespace(const struct kobject *kobj)
 {
 	struct netdev_queue *queue = to_netdev_queue(kobj);
 	struct device *dev = &queue->dev->dev;
-	const void *ns = NULL;
 
 	if (dev->class && dev->class->namespace)
-		ns = dev->class->namespace(dev);
+		return dev->class->namespace(dev);
 
-	return ns;
+	return NULL;
 }
 
 static void netdev_queue_get_ownership(const struct kobject *kobj,
 				       kuid_t *uid, kgid_t *gid)
 {
-	const struct net *net = netdev_queue_namespace(kobj);
+	const struct ns_common *ns = netdev_queue_namespace(kobj);
 
-	net_ns_get_ownership(net, uid, gid);
+	net_ns_get_ownership(ns ? container_of(ns, struct net, ns) : NULL,
+			     uid, gid);
 }
 
 static const struct kobj_type netdev_queue_ktype = {
@@ -2061,7 +2063,7 @@ netdev_queue_update_kobjects(struct net_device *dev, int old_num, int new_num)
 	while (--i >= new_num) {
 		struct netdev_queue *queue = dev->_tx + i;
 
-		if (!refcount_read(&dev_net(dev)->ns.count))
+		if (!check_net(dev_net(dev)))
 			queue->kobj.uevent_suppress = 1;
 
 		if (netdev_uses_bql(dev))
@@ -2183,24 +2185,24 @@ static bool net_current_may_mount(void)
 	return ns_capable(net->user_ns, CAP_SYS_ADMIN);
 }
 
-static void *net_grab_current_ns(void)
+static struct ns_common *net_grab_current_ns(void)
 {
-	struct net *ns = current->nsproxy->net_ns;
+	struct net *net = current->nsproxy->net_ns;
 #ifdef CONFIG_NET_NS
-	if (ns)
-		refcount_inc(&ns->passive);
+	if (net)
+		refcount_inc(&net->passive);
 #endif
-	return ns;
+	return net ? to_ns_common(net) : NULL;
 }
 
-static const void *net_initial_ns(void)
+static const struct ns_common *net_initial_ns(void)
 {
-	return &init_net;
+	return to_ns_common(&init_net);
 }
 
-static const void *net_netlink_ns(struct sock *sk)
+static const struct ns_common *net_netlink_ns(struct sock *sk)
 {
-	return sock_net(sk);
+	return to_ns_common(sock_net(sk));
 }
 
 const struct kobj_ns_type_operations net_ns_type_operations = {
@@ -2250,11 +2252,11 @@ static void netdev_release(struct device *d)
 	kvfree(dev);
 }
 
-static const void *net_namespace(const struct device *d)
+static const struct ns_common *net_namespace(const struct device *d)
 {
 	const struct net_device *dev = to_net_dev(d);
 
-	return dev_net(dev);
+	return to_ns_common(dev_net(dev));
 }
 
 static void net_get_ownership(const struct device *d, kuid_t *uid, kgid_t *gid)
@@ -2315,7 +2317,7 @@ void netdev_unregister_kobject(struct net_device *ndev)
 {
 	struct device *dev = &ndev->dev;
 
-	if (!refcount_read(&dev_net(ndev)->ns.count))
+	if (!check_net(dev_net(ndev)))
 		dev_set_uevent_suppress(dev, 1);
 
 	kobject_get(&dev->kobj);
@@ -2400,14 +2402,14 @@ int netdev_change_owner(struct net_device *ndev, const struct net *net_old,
 }
 
 int netdev_class_create_file_ns(const struct class_attribute *class_attr,
-				const void *ns)
+				const struct ns_common *ns)
 {
 	return class_create_file_ns(&net_class, class_attr, ns);
 }
 EXPORT_SYMBOL(netdev_class_create_file_ns);
 
 void netdev_class_remove_file_ns(const struct class_attribute *class_attr,
-				 const void *ns)
+				 const struct ns_common *ns)
 {
 	class_remove_file_ns(&net_class, class_attr, ns);
 }

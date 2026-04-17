@@ -83,6 +83,7 @@ struct hx852x_touch_info {
 static int hx852x_i2c_read(struct hx852x *hx, u8 cmd, void *data, u16 len)
 {
 	struct i2c_client *client = hx->client;
+	int error;
 	int ret;
 
 	struct i2c_msg msg[] = {
@@ -102,8 +103,9 @@ static int hx852x_i2c_read(struct hx852x *hx, u8 cmd, void *data, u16 len)
 
 	ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
 	if (ret != ARRAY_SIZE(msg)) {
-		dev_err(&client->dev, "failed to read %#x: %d\n", cmd, ret);
-		return ret;
+		error = ret < 0 ? ret : -EIO;
+		dev_err(&client->dev, "failed to read %#x: %d\n", cmd, error);
+		return error;
 	}
 
 	return 0;
@@ -191,7 +193,7 @@ static int hx852x_read_config(struct hx852x *hx)
 	struct device *dev = &hx->client->dev;
 	struct hx852x_config conf;
 	int x_res, y_res;
-	int error;
+	int error, error2;
 
 	error = hx852x_power_on(hx);
 	if (error)
@@ -239,9 +241,11 @@ static int hx852x_read_config(struct hx852x *hx)
 	}
 
 err_test_mode:
-	error = i2c_smbus_write_byte_data(hx->client, HX852X_REG_SRAM_SWITCH, 0) ? : error;
+	error2 = i2c_smbus_write_byte_data(hx->client, HX852X_REG_SRAM_SWITCH, 0);
+	error = error ?: error2;
 err_power_off:
-	return hx852x_power_off(hx) ? : error;
+	error2 = hx852x_power_off(hx);
+	return error ?: error2;
 }
 
 static int hx852x_handle_events(struct hx852x *hx)
@@ -306,7 +310,8 @@ static irqreturn_t hx852x_interrupt(int irq, void *ptr)
 
 	error = hx852x_handle_events(hx);
 	if (error) {
-		dev_err_ratelimited(&hx->client->dev, "failed to handle events: %d\n", error);
+		dev_err_ratelimited(&hx->client->dev,
+				    "failed to handle events: %d\n", error);
 		return IRQ_NONE;
 	}
 
@@ -451,27 +456,25 @@ static int hx852x_probe(struct i2c_client *client)
 static int hx852x_suspend(struct device *dev)
 {
 	struct hx852x *hx = dev_get_drvdata(dev);
-	int error = 0;
 
-	mutex_lock(&hx->input_dev->mutex);
+	guard(mutex)(&hx->input_dev->mutex);
+
 	if (input_device_enabled(hx->input_dev))
-		error = hx852x_stop(hx);
-	mutex_unlock(&hx->input_dev->mutex);
+		return hx852x_stop(hx);
 
-	return error;
+	return 0;
 }
 
 static int hx852x_resume(struct device *dev)
 {
 	struct hx852x *hx = dev_get_drvdata(dev);
-	int error = 0;
 
-	mutex_lock(&hx->input_dev->mutex);
+	guard(mutex)(&hx->input_dev->mutex);
+
 	if (input_device_enabled(hx->input_dev))
-		error = hx852x_start(hx);
-	mutex_unlock(&hx->input_dev->mutex);
+		return hx852x_start(hx);
 
-	return error;
+	return 0;
 }
 
 static DEFINE_SIMPLE_DEV_PM_OPS(hx852x_pm_ops, hx852x_suspend, hx852x_resume);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -32,7 +32,7 @@ static const struct regulator_bulk_data sc7798a_bv045wvm_supplies[] = {
 static inline
 struct sc7798a_bv045wvm *to_sc7798a_bv045wvm(struct drm_panel *panel)
 {
-	return container_of(panel, struct sc7798a_bv045wvm, panel);
+	return container_of_const(panel, struct sc7798a_bv045wvm, panel);
 }
 
 static void sc7798a_bv045wvm_reset(struct sc7798a_bv045wvm *ctx)

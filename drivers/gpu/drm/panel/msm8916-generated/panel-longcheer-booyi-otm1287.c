@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -23,7 +23,7 @@ struct booyi_otm1287 {
 
 static inline struct booyi_otm1287 *to_booyi_otm1287(struct drm_panel *panel)
 {
-	return container_of(panel, struct booyi_otm1287, panel);
+	return container_of_const(panel, struct booyi_otm1287, panel);
 }
 
 static void booyi_otm1287_reset(struct booyi_otm1287 *ctx)

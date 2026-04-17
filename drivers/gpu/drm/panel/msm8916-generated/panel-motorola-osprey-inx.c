@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -31,7 +31,7 @@ static const struct regulator_bulk_data inx_500_v0_supplies[] = {
 
 static inline struct inx_500_v0 *to_inx_500_v0(struct drm_panel *panel)
 {
-	return container_of(panel, struct inx_500_v0, panel);
+	return container_of_const(panel, struct inx_500_v0, panel);
 }
 
 static void inx_500_v0_reset(struct inx_500_v0 *ctx)

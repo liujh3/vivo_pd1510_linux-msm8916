@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -28,7 +28,7 @@ static const struct regulator_bulk_data otm1901a_tm_supplies[] = {
 
 static inline struct otm1901a_tm *to_otm1901a_tm(struct drm_panel *panel)
 {
-	return container_of(panel, struct otm1901a_tm, panel);
+	return container_of_const(panel, struct otm1901a_tm, panel);
 }
 
 static void otm1901a_tm_reset(struct otm1901a_tm *ctx)

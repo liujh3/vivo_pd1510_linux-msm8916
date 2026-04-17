@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2025 FIXME
+// Copyright (c) 2026 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -25,7 +25,7 @@ struct r61308 {
 
 static inline struct r61308 *to_r61308(struct drm_panel *panel)
 {
-	return container_of(panel, struct r61308, panel);
+	return container_of_const(panel, struct r61308, panel);
 }
 
 static void r61308_reset(struct r61308 *ctx)

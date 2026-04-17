@@ -3,10 +3,11 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include <linux/iopoll.h>
+
 #include <drm/drm_print.h>
 
 #include "i915_reg.h"
-#include "i915_utils.h"
 #include "intel_atomic.h"
 #include "intel_cx0_phy_regs.h"
 #include "intel_ddi.h"
@@ -16,17 +17,13 @@
 #include "intel_display_power_map.h"
 #include "intel_display_regs.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dkl_phy_regs.h"
 #include "intel_dp.h"
 #include "intel_dp_mst.h"
 #include "intel_mg_phy_regs.h"
 #include "intel_modeset_lock.h"
 #include "intel_tc.h"
-
-#define DP_PIN_ASSIGNMENT_NONE	0x0
-#define DP_PIN_ASSIGNMENT_C	0x3
-#define DP_PIN_ASSIGNMENT_D	0x4
-#define DP_PIN_ASSIGNMENT_E	0x5
 
 enum tc_port_mode {
 	TC_PORT_DISCONNECTED,
@@ -54,7 +51,7 @@ struct intel_tc_port {
 	const struct intel_tc_phy_ops *phy_ops;
 
 	struct mutex lock;	/* protects the TypeC port mode */
-	intel_wakeref_t lock_wakeref;
+	struct ref_tracker *lock_wakeref;
 #if IS_ENABLED(CONFIG_DRM_I915_DEBUG_RUNTIME_PM)
 	enum intel_display_power_domain lock_power_domain;
 #endif
@@ -66,6 +63,7 @@ struct intel_tc_port {
 	enum tc_port_mode mode;
 	enum tc_port_mode init_mode;
 	enum phy_fia phy_fia;
+	enum intel_tc_pin_assignment pin_assignment;
 	u8 phy_fia_idx;
 	u8 max_lane_count;
 };
@@ -184,7 +182,7 @@ bool intel_tc_cold_requires_aux_pw(struct intel_digital_port *dig_port)
 	       intel_display_power_legacy_aux_domain(display, dig_port->aux_ch);
 }
 
-static intel_wakeref_t
+static struct ref_tracker *
 __tc_cold_block(struct intel_tc_port *tc, enum intel_display_power_domain *domain)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
@@ -194,11 +192,11 @@ __tc_cold_block(struct intel_tc_port *tc, enum intel_display_power_domain *domai
 	return intel_display_power_get(display, *domain);
 }
 
-static intel_wakeref_t
+static struct ref_tracker *
 tc_cold_block(struct intel_tc_port *tc)
 {
 	enum intel_display_power_domain domain;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 
 	wakeref = __tc_cold_block(tc, &domain);
 #if IS_ENABLED(CONFIG_DRM_I915_DEBUG_RUNTIME_PM)
@@ -209,7 +207,7 @@ tc_cold_block(struct intel_tc_port *tc)
 
 static void
 __tc_cold_unblock(struct intel_tc_port *tc, enum intel_display_power_domain domain,
-		  intel_wakeref_t wakeref)
+		  struct ref_tracker *wakeref)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
 
@@ -217,7 +215,7 @@ __tc_cold_unblock(struct intel_tc_port *tc, enum intel_display_power_domain doma
 }
 
 static void
-tc_cold_unblock(struct intel_tc_port *tc, intel_wakeref_t wakeref)
+tc_cold_unblock(struct intel_tc_port *tc, struct ref_tracker *wakeref)
 {
 	struct intel_display __maybe_unused *display = to_intel_display(tc->dig_port);
 	enum intel_display_power_domain domain = tc_phy_cold_off_domain(tc);
@@ -253,6 +251,9 @@ tc_port_power_domain(struct intel_tc_port *tc)
 {
 	enum tc_port tc_port = intel_encoder_to_tc(&tc->dig_port->base);
 
+	if (tc_port == TC_PORT_NONE)
+		return POWER_DOMAIN_INVALID;
+
 	return POWER_DOMAIN_PORT_DDI_LANES_TC1 + tc_port - TC_PORT_1;
 }
 
@@ -265,13 +266,13 @@ assert_tc_port_power_enabled(struct intel_tc_port *tc)
 		    !intel_display_power_is_enabled(display, tc_port_power_domain(tc)));
 }
 
-static u32 intel_tc_port_get_lane_mask(struct intel_digital_port *dig_port)
+static u32 get_lane_mask(struct intel_tc_port *tc)
 {
-	struct intel_display *display = to_intel_display(dig_port);
-	struct intel_tc_port *tc = to_tc_port(dig_port);
+	struct intel_display *display = to_intel_display(tc->dig_port);
 	u32 lane_mask;
 
-	lane_mask = intel_de_read(display, PORT_TX_DFLEXDPSP(tc->phy_fia));
+	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE)
+		lane_mask = intel_de_read(display, PORT_TX_DFLEXDPSP(tc->phy_fia));
 
 	drm_WARN_ON(display->drm, lane_mask == 0xffffffff);
 	assert_tc_cold_blocked(tc);
@@ -280,77 +281,86 @@ static u32 intel_tc_port_get_lane_mask(struct intel_digital_port *dig_port)
 	return lane_mask >> DP_LANE_ASSIGNMENT_SHIFT(tc->phy_fia_idx);
 }
 
-u32 intel_tc_port_get_pin_assignment_mask(struct intel_digital_port *dig_port)
+static char pin_assignment_name(enum intel_tc_pin_assignment pin_assignment)
 {
-	struct intel_display *display = to_intel_display(dig_port);
-	struct intel_tc_port *tc = to_tc_port(dig_port);
-	u32 pin_mask;
+	if (pin_assignment == INTEL_TC_PIN_ASSIGNMENT_NONE)
+		return '-';
 
-	pin_mask = intel_de_read(display, PORT_TX_DFLEXPA1(tc->phy_fia));
-
-	drm_WARN_ON(display->drm, pin_mask == 0xffffffff);
-	assert_tc_cold_blocked(tc);
-
-	return (pin_mask & DP_PIN_ASSIGNMENT_MASK(tc->phy_fia_idx)) >>
-	       DP_PIN_ASSIGNMENT_SHIFT(tc->phy_fia_idx);
+	return 'A' + pin_assignment - INTEL_TC_PIN_ASSIGNMENT_A;
 }
 
-static int lnl_tc_port_get_max_lane_count(struct intel_digital_port *dig_port)
+static enum intel_tc_pin_assignment
+get_pin_assignment(struct intel_tc_port *tc)
 {
-	struct intel_display *display = to_intel_display(dig_port);
-	enum tc_port tc_port = intel_encoder_to_tc(&dig_port->base);
-	intel_wakeref_t wakeref;
-	u32 val, pin_assignment;
+	struct intel_display *display = to_intel_display(tc->dig_port);
+	enum tc_port tc_port = intel_encoder_to_tc(&tc->dig_port->base);
+	enum intel_tc_pin_assignment pin_assignment;
+	i915_reg_t reg;
+	u32 mask;
+	u32 val;
 
-	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE, wakeref)
-		val = intel_de_read(display, TCSS_DDI_STATUS(tc_port));
+	if (tc->mode == TC_PORT_TBT_ALT)
+		return INTEL_TC_PIN_ASSIGNMENT_NONE;
 
-	pin_assignment =
-		REG_FIELD_GET(TCSS_DDI_STATUS_PIN_ASSIGNMENT_MASK, val);
+	if (DISPLAY_VER(display) >= 20) {
+		reg = TCSS_DDI_STATUS(tc_port);
+		mask = TCSS_DDI_STATUS_PIN_ASSIGNMENT_MASK;
+	} else {
+		reg = PORT_TX_DFLEXPA1(tc->phy_fia);
+		mask = DP_PIN_ASSIGNMENT_MASK(tc->phy_fia_idx);
+	}
+
+	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE)
+		val = intel_de_read(display, reg);
+
+	drm_WARN_ON(display->drm, val == 0xffffffff);
+	assert_tc_cold_blocked(tc);
+
+	pin_assignment = (val & mask) >> (ffs(mask) - 1);
 
 	switch (pin_assignment) {
-	case DP_PIN_ASSIGNMENT_NONE:
+	case INTEL_TC_PIN_ASSIGNMENT_A:
+	case INTEL_TC_PIN_ASSIGNMENT_B:
+	case INTEL_TC_PIN_ASSIGNMENT_F:
+		drm_WARN_ON(display->drm, DISPLAY_VER(display) > 11);
+		break;
+	case INTEL_TC_PIN_ASSIGNMENT_NONE:
+	case INTEL_TC_PIN_ASSIGNMENT_C:
+	case INTEL_TC_PIN_ASSIGNMENT_D:
+	case INTEL_TC_PIN_ASSIGNMENT_E:
+		break;
+	default:
+		MISSING_CASE(pin_assignment);
+	}
+
+	return pin_assignment;
+}
+
+static int mtl_get_max_lane_count(struct intel_tc_port *tc)
+{
+	enum intel_tc_pin_assignment pin_assignment;
+
+	pin_assignment = get_pin_assignment(tc);
+
+	switch (pin_assignment) {
+	case INTEL_TC_PIN_ASSIGNMENT_NONE:
 		return 0;
 	default:
 		MISSING_CASE(pin_assignment);
 		fallthrough;
-	case DP_PIN_ASSIGNMENT_D:
+	case INTEL_TC_PIN_ASSIGNMENT_D:
 		return 2;
-	case DP_PIN_ASSIGNMENT_C:
-	case DP_PIN_ASSIGNMENT_E:
+	case INTEL_TC_PIN_ASSIGNMENT_C:
+	case INTEL_TC_PIN_ASSIGNMENT_E:
 		return 4;
 	}
 }
 
-static int mtl_tc_port_get_max_lane_count(struct intel_digital_port *dig_port)
+static int icl_get_max_lane_count(struct intel_tc_port *tc)
 {
-	struct intel_display *display = to_intel_display(dig_port);
-	intel_wakeref_t wakeref;
-	u32 pin_mask;
-
-	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE, wakeref)
-		pin_mask = intel_tc_port_get_pin_assignment_mask(dig_port);
-
-	switch (pin_mask) {
-	default:
-		MISSING_CASE(pin_mask);
-		fallthrough;
-	case DP_PIN_ASSIGNMENT_D:
-		return 2;
-	case DP_PIN_ASSIGNMENT_C:
-	case DP_PIN_ASSIGNMENT_E:
-		return 4;
-	}
-}
-
-static int intel_tc_port_get_max_lane_count(struct intel_digital_port *dig_port)
-{
-	struct intel_display *display = to_intel_display(dig_port);
-	intel_wakeref_t wakeref;
 	u32 lane_mask = 0;
 
-	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE, wakeref)
-		lane_mask = intel_tc_port_get_lane_mask(dig_port);
+	lane_mask = get_lane_mask(tc);
 
 	switch (lane_mask) {
 	default:
@@ -372,39 +382,41 @@ static int intel_tc_port_get_max_lane_count(struct intel_digital_port *dig_port)
 static int get_max_lane_count(struct intel_tc_port *tc)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
-	struct intel_digital_port *dig_port = tc->dig_port;
 
 	if (tc->mode != TC_PORT_DP_ALT)
 		return 4;
 
-	assert_tc_cold_blocked(tc);
-
-	if (DISPLAY_VER(display) >= 20)
-		return lnl_tc_port_get_max_lane_count(dig_port);
-
 	if (DISPLAY_VER(display) >= 14)
-		return mtl_tc_port_get_max_lane_count(dig_port);
+		return mtl_get_max_lane_count(tc);
 
-	return intel_tc_port_get_max_lane_count(dig_port);
+	return icl_get_max_lane_count(tc);
 }
 
 static void read_pin_configuration(struct intel_tc_port *tc)
 {
+	tc->pin_assignment = get_pin_assignment(tc);
 	tc->max_lane_count = get_max_lane_count(tc);
 }
 
 int intel_tc_port_max_lane_count(struct intel_digital_port *dig_port)
 {
-	struct intel_display *display = to_intel_display(dig_port);
 	struct intel_tc_port *tc = to_tc_port(dig_port);
 
 	if (!intel_encoder_is_tc(&dig_port->base))
 		return 4;
 
-	if (DISPLAY_VER(display) < 20)
-		return get_max_lane_count(tc);
-
 	return tc->max_lane_count;
+}
+
+enum intel_tc_pin_assignment
+intel_tc_port_get_pin_assignment(struct intel_digital_port *dig_port)
+{
+	struct intel_tc_port *tc = to_tc_port(dig_port);
+
+	if (!intel_encoder_is_tc(&dig_port->base))
+		return INTEL_TC_PIN_ASSIGNMENT_NONE;
+
+	return tc->pin_assignment;
 }
 
 void intel_tc_port_set_fia_lane_count(struct intel_digital_port *dig_port,
@@ -513,12 +525,11 @@ static u32 icl_tc_phy_hpd_live_status(struct intel_tc_port *tc)
 	struct intel_display *display = to_intel_display(tc->dig_port);
 	struct intel_digital_port *dig_port = tc->dig_port;
 	u32 isr_bit = display->hotplug.pch_hpd[dig_port->base.hpd_pin];
-	intel_wakeref_t wakeref;
 	u32 fia_isr;
 	u32 pch_isr;
 	u32 mask = 0;
 
-	with_intel_display_power(display, tc_phy_cold_off_domain(tc), wakeref) {
+	with_intel_display_power(display, tc_phy_cold_off_domain(tc)) {
 		fia_isr = intel_de_read(display, PORT_TX_DFLEXDPSP(tc->phy_fia));
 		pch_isr = intel_de_read(display, SDEISR);
 	}
@@ -614,7 +625,7 @@ static bool icl_tc_phy_is_owned(struct intel_tc_port *tc)
 static void icl_tc_phy_get_hw_state(struct intel_tc_port *tc)
 {
 	enum intel_display_power_domain domain;
-	intel_wakeref_t tc_cold_wref;
+	struct ref_tracker *tc_cold_wref;
 
 	tc_cold_wref = __tc_cold_block(tc, &domain);
 
@@ -760,10 +771,9 @@ tgl_tc_phy_cold_off_domain(struct intel_tc_port *tc)
 static void tgl_tc_phy_init(struct intel_tc_port *tc)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
-	intel_wakeref_t wakeref;
 	u32 val;
 
-	with_intel_display_power(display, tc_phy_cold_off_domain(tc), wakeref)
+	with_intel_display_power(display, tc_phy_cold_off_domain(tc))
 		val = intel_de_read(display, PORT_TX_DFLEXDPSP(FIA1));
 
 	drm_WARN_ON(display->drm, val == 0xffffffff);
@@ -805,12 +815,11 @@ static u32 adlp_tc_phy_hpd_live_status(struct intel_tc_port *tc)
 	enum hpd_pin hpd_pin = dig_port->base.hpd_pin;
 	u32 cpu_isr_bits = display->hotplug.hpd[hpd_pin];
 	u32 pch_isr_bit = display->hotplug.pch_hpd[hpd_pin];
-	intel_wakeref_t wakeref;
 	u32 cpu_isr;
 	u32 pch_isr;
 	u32 mask = 0;
 
-	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE, wakeref) {
+	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE) {
 		cpu_isr = intel_de_read(display, GEN11_DE_HPD_ISR);
 		pch_isr = intel_de_read(display, SDEISR);
 	}
@@ -883,7 +892,7 @@ static void adlp_tc_phy_get_hw_state(struct intel_tc_port *tc)
 	struct intel_display *display = to_intel_display(tc->dig_port);
 	enum intel_display_power_domain port_power_domain =
 		tc_port_power_domain(tc);
-	intel_wakeref_t port_wakeref;
+	struct ref_tracker *port_wakeref;
 
 	port_wakeref = intel_display_power_get(display, port_power_domain);
 
@@ -902,7 +911,7 @@ static bool adlp_tc_phy_connect(struct intel_tc_port *tc, int required_lanes)
 	struct intel_display *display = to_intel_display(tc->dig_port);
 	enum intel_display_power_domain port_power_domain =
 		tc_port_power_domain(tc);
-	intel_wakeref_t port_wakeref;
+	struct ref_tracker *port_wakeref;
 
 	if (tc->mode == TC_PORT_TBT_ALT) {
 		tc->lock_wakeref = tc_cold_block(tc);
@@ -954,7 +963,7 @@ static void adlp_tc_phy_disconnect(struct intel_tc_port *tc)
 	struct intel_display *display = to_intel_display(tc->dig_port);
 	enum intel_display_power_domain port_power_domain =
 		tc_port_power_domain(tc);
-	intel_wakeref_t port_wakeref;
+	struct ref_tracker *port_wakeref;
 
 	port_wakeref = intel_display_power_get(display, port_power_domain);
 
@@ -1001,12 +1010,11 @@ static u32 xelpdp_tc_phy_hpd_live_status(struct intel_tc_port *tc)
 	enum hpd_pin hpd_pin = dig_port->base.hpd_pin;
 	u32 pica_isr_bits = display->hotplug.hpd[hpd_pin];
 	u32 pch_isr_bit = display->hotplug.pch_hpd[hpd_pin];
-	intel_wakeref_t wakeref;
 	u32 pica_isr;
 	u32 pch_isr;
 	u32 mask = 0;
 
-	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE, wakeref) {
+	with_intel_display_power(display, POWER_DOMAIN_DISPLAY_CORE) {
 		pica_isr = intel_de_read(display, PICAINTERRUPT_ISR);
 		pch_isr = intel_de_read(display, SDEISR);
 	}
@@ -1038,8 +1046,13 @@ static bool
 xelpdp_tc_phy_wait_for_tcss_power(struct intel_tc_port *tc, bool enabled)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
+	bool is_enabled;
+	int ret;
 
-	if (wait_for(xelpdp_tc_phy_tcss_power_is_enabled(tc) == enabled, 5)) {
+	ret = poll_timeout_us(is_enabled = xelpdp_tc_phy_tcss_power_is_enabled(tc),
+			      is_enabled == enabled,
+			      200, 5000, false);
+	if (ret) {
 		drm_dbg_kms(display->drm,
 			    "Port %s: timeout waiting for TCSS power to get %s\n",
 			    str_enabled_disabled(enabled),
@@ -1057,8 +1070,8 @@ xelpdp_tc_phy_wait_for_tcss_power(struct intel_tc_port *tc, bool enabled)
 static void xelpdp_tc_power_request_wa(struct intel_display *display, bool enable)
 {
 	/* check if mailbox is running busy */
-	if (intel_de_wait_for_clear(display, TCSS_DISP_MAILBOX_IN_CMD,
-				    TCSS_DISP_MAILBOX_IN_CMD_RUN_BUSY, 10)) {
+	if (intel_de_wait_for_clear_ms(display, TCSS_DISP_MAILBOX_IN_CMD,
+				       TCSS_DISP_MAILBOX_IN_CMD_RUN_BUSY, 10)) {
 		drm_dbg_kms(display->drm,
 			    "Timeout waiting for TCSS mailbox run/busy bit to clear\n");
 		return;
@@ -1070,8 +1083,8 @@ static void xelpdp_tc_power_request_wa(struct intel_display *display, bool enabl
 		       TCSS_DISP_MAILBOX_IN_CMD_DATA(0x1));
 
 	/* wait to clear mailbox running busy bit before continuing */
-	if (intel_de_wait_for_clear(display, TCSS_DISP_MAILBOX_IN_CMD,
-				    TCSS_DISP_MAILBOX_IN_CMD_RUN_BUSY, 10)) {
+	if (intel_de_wait_for_clear_ms(display, TCSS_DISP_MAILBOX_IN_CMD,
+				       TCSS_DISP_MAILBOX_IN_CMD_RUN_BUSY, 10)) {
 		drm_dbg_kms(display->drm,
 			    "Timeout after writing data to mailbox. Mailbox run/busy bit did not clear\n");
 		return;
@@ -1156,7 +1169,7 @@ static bool xelpdp_tc_phy_is_owned(struct intel_tc_port *tc)
 static void xelpdp_tc_phy_get_hw_state(struct intel_tc_port *tc)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
-	intel_wakeref_t tc_cold_wref;
+	struct ref_tracker *tc_cold_wref;
 	enum intel_display_power_domain domain;
 
 	tc_cold_wref = __tc_cold_block(tc, &domain);
@@ -1320,8 +1333,13 @@ static bool tc_phy_is_connected(struct intel_tc_port *tc,
 static bool tc_phy_wait_for_ready(struct intel_tc_port *tc)
 {
 	struct intel_display *display = to_intel_display(tc->dig_port);
+	bool is_ready;
+	int ret;
 
-	if (wait_for(tc_phy_is_ready(tc), 500)) {
+	ret = poll_timeout_us(is_ready = tc_phy_is_ready(tc),
+			      is_ready,
+			      1000, 500 * 1000, false);
+	if (ret) {
 		drm_err(display->drm, "Port %s: timeout waiting for PHY ready\n",
 			tc->port_name);
 
@@ -1509,10 +1527,13 @@ static void intel_tc_port_reset_mode(struct intel_tc_port *tc,
 	if (!force_disconnect)
 		tc_phy_connect(tc, required_lanes);
 
-	drm_dbg_kms(display->drm, "Port %s: TC port mode reset (%s -> %s)\n",
+	drm_dbg_kms(display->drm,
+		    "Port %s: TC port mode reset (%s -> %s) pin assignment: %c max lanes: %d\n",
 		    tc->port_name,
 		    tc_port_mode_name(old_tc_mode),
-		    tc_port_mode_name(tc->mode));
+		    tc_port_mode_name(tc->mode),
+		    pin_assignment_name(tc->pin_assignment),
+		    tc->max_lane_count);
 }
 
 static bool intel_tc_port_needs_reset(struct intel_tc_port *tc)
@@ -1667,11 +1688,26 @@ void intel_tc_port_sanitize_mode(struct intel_digital_port *dig_port,
 		__intel_tc_port_put_link(tc);
 	}
 
-	drm_dbg_kms(display->drm, "Port %s: sanitize mode (%s)\n",
+	drm_dbg_kms(display->drm, "Port %s: sanitize mode (%s) pin assignment: %c max lanes: %d\n",
 		    tc->port_name,
-		    tc_port_mode_name(tc->mode));
+		    tc_port_mode_name(tc->mode),
+		    pin_assignment_name(tc->pin_assignment),
+		    tc->max_lane_count);
 
 	mutex_unlock(&tc->lock);
+}
+
+void intel_tc_info(struct drm_printer *p,  struct intel_digital_port *dig_port)
+{
+	struct intel_tc_port *tc = to_tc_port(dig_port);
+
+	intel_tc_port_lock(dig_port);
+	drm_printf(p, "\tTC Port %s: mode: %s, pin assignment: %c, max lanes: %d\n",
+		   tc->port_name,
+		   tc_port_mode_name(tc->mode),
+		   pin_assignment_name(tc->pin_assignment),
+		   tc->max_lane_count);
+	intel_tc_port_unlock(dig_port);
 }
 
 /*
@@ -1941,7 +1977,7 @@ int intel_tc_port_init(struct intel_digital_port *dig_port, bool is_legacy)
 	if (drm_WARN_ON(display->drm, tc_port == TC_PORT_NONE))
 		return -EINVAL;
 
-	tc = kzalloc(sizeof(*tc), GFP_KERNEL);
+	tc = kzalloc_obj(*tc);
 	if (!tc)
 		return -ENOMEM;
 
