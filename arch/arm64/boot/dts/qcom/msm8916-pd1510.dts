@@ -265,8 +265,8 @@
 		pinctrl-names = "default";
 		interrupt-parent = <&tlmm>;
 		interrupts = <13 IRQ_TYPE_LEVEL_LOW>;
-		irq-gpios = <&tlmm 13 GPIO_ACTIVE_LOW>;
-		reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
+		irq-gpios = <&tlmm 13 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm 12 GPIO_ACTIVE_HIGH>;
         AVDD28-supply = <&pm8916_l16>;
         touchscreen-size-x = <540>;
         touchscreen-size-y = <960>;
