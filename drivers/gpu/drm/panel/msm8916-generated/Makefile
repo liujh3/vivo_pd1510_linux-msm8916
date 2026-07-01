@@ -5,6 +5,7 @@ obj-$(CONFIG_DRM_PANEL_ALCATEL_IDOL3_R63315) += panel-alcatel-idol3-r63315.o
 obj-$(CONFIG_DRM_PANEL_ASUS_Z00L_OTM1284A) += panel-asus-z00l-otm1284a.o
 obj-$(CONFIG_DRM_PANEL_ASUS_Z00T_TM5P5_NT35596) += panel-asus-z00t-tm5p5-nt35596.o
 obj-$(CONFIG_DRM_PANEL_ASUS_Z010D_R69339) += panel-asus-z010d-r69339.o
+obj-$(CONFIG_DRM_PANEL_BOEOTM9605A) += panel-boeotm9605a.o
 obj-$(CONFIG_DRM_PANEL_GPLUS_FL8005A_HX8394D) += panel-gplus-fl8005a-hx8394d.o
 obj-$(CONFIG_DRM_PANEL_HUAWEI_BOE_OTM8019A) += panel-huawei-boe-otm8019a.o
 obj-$(CONFIG_DRM_PANEL_HUAWEI_KIWI_AUO_OTM1901A) += panel-huawei-kiwi-auo-otm1901a.o
